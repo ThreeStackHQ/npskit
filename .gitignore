@@ -5,6 +5,8 @@ node_modules
 # Build outputs
 .next
 dist
+# Allow widget pre-built dist to be committed
+!packages/widget/dist
 *.js.map
 .turbo
 

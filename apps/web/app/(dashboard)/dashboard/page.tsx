@@ -5,35 +5,6 @@ import NPSTrendChart from "./NPSTrendChart";
 
 export const dynamic = "force-dynamic";
 
-// Generate mock 30-day trend data
-function getMockTrendData() {
-  const data = [];
-  const now = new Date();
-  let score = 30;
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    score += Math.floor(Math.random() * 10) - 4;
-    score = Math.max(-100, Math.min(100, score));
-    data.push({
-      date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      score,
-    });
-  }
-  return data;
-}
-
-const MOCK_TREND = getMockTrendData();
-
-const MOCK_RESPONSES = [
-  { id: "1", score: 10, type: "Promoter", comment: "Absolutely love it, so much better than Delighted!", date: "Mar 1, 2026" },
-  { id: "2", score: 9, type: "Promoter", comment: "Setup took 2 minutes. Dashboard is clean.", date: "Feb 28, 2026" },
-  { id: "3", score: 7, type: "Passive", comment: "Works well, would love more integrations.", date: "Feb 27, 2026" },
-  { id: "4", score: 4, type: "Detractor", comment: "Missing some features I had in Delighted.", date: "Feb 26, 2026" },
-  { id: "5", score: 10, type: "Promoter", comment: "Finally an affordable NPS tool!", date: "Feb 25, 2026" },
-  { id: "6", score: 8, type: "Passive", comment: "Pretty good overall.", date: "Feb 24, 2026" },
-];
-
 function ScoreBadge({ score }: { score: number }) {
   const cls =
     score >= 9
@@ -60,10 +31,15 @@ function TypeBadge({ type }: { type: string }) {
   );
 }
 
+function responseType(score: number): string {
+  if (score >= 9) return "Promoter";
+  if (score >= 7) return "Passive";
+  return "Detractor";
+}
+
 function NPSGauge({ score }: { score: number }) {
-  // SVG arc gauge: -100 to 100 mapped to 0-180 degrees
-  const pct = (score + 100) / 200; // 0..1
-  const ANGLE = pct * 180; // degrees of arc filled
+  const pct = (score + 100) / 200;
+  const ANGLE = pct * 180;
   const r = 70;
   const cx = 90;
   const cy = 90;
@@ -79,12 +55,10 @@ function NPSGauge({ score }: { score: number }) {
   const start = polarToCartesian(0);
   const end = polarToCartesian(ANGLE);
   const largeArc = ANGLE > 90 ? 1 : 0;
-
   const trackEnd = polarToCartesian(180);
 
   return (
     <svg width="180" height="100" viewBox="0 0 180 100" className="mx-auto">
-      {/* Track */}
       <path
         d={`M ${start.x} ${start.y} A ${r} ${r} 0 0 1 ${trackEnd.x} ${trackEnd.y}`}
         fill="none"
@@ -92,7 +66,6 @@ function NPSGauge({ score }: { score: number }) {
         strokeWidth="12"
         strokeLinecap="round"
       />
-      {/* Filled arc */}
       {ANGLE > 0 && (
         <path
           d={`M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 1 ${end.x} ${end.y}`}
@@ -102,11 +75,69 @@ function NPSGauge({ score }: { score: number }) {
           strokeLinecap="round"
         />
       )}
-      {/* Labels */}
       <text x="10" y="98" fill="#6b7280" fontSize="10">-100</text>
       <text x="150" y="98" fill="#6b7280" fontSize="10">100</text>
     </svg>
   );
+}
+
+// Build a 30-day NPS trend using the provided responses
+type TrendPoint = { date: string; score: number };
+
+function buildTrend(
+  allResponses: Array<{ score: number; respondedAt: Date }>
+): TrendPoint[] {
+  const today = new Date();
+
+  // Bucket per ISO date key
+  type Bucket = { promoters: number; detractors: number; total: number };
+  const buckets = new Map<string, Bucket>();
+
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split("T")[0]!;
+    buckets.set(key, { promoters: 0, detractors: 0, total: 0 });
+  }
+
+  const cutoff = new Date(today);
+  cutoff.setDate(cutoff.getDate() - 29);
+  cutoff.setHours(0, 0, 0, 0);
+
+  for (const r of allResponses) {
+    const ts = new Date(r.respondedAt);
+    if (ts < cutoff) continue;
+    const key = ts.toISOString().split("T")[0]!;
+    const bucket = buckets.get(key);
+    if (!bucket) continue;
+    bucket.total++;
+    if (r.score >= 9) bucket.promoters++;
+    else if (r.score <= 6) bucket.detractors++;
+  }
+
+  // Build cumulative NPS per day
+  let cumPromoters = 0;
+  let cumDetractors = 0;
+  let cumTotal = 0;
+  const result: TrendPoint[] = [];
+
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split("T")[0]!;
+    const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const bucket = buckets.get(key)!;
+    cumPromoters += bucket.promoters;
+    cumDetractors += bucket.detractors;
+    cumTotal += bucket.total;
+    const score =
+      cumTotal > 0
+        ? Math.round(((cumPromoters - cumDetractors) / cumTotal) * 100)
+        : 0;
+    result.push({ date: label, score });
+  }
+
+  return result;
 }
 
 export default async function DashboardPage() {
@@ -130,26 +161,42 @@ export default async function DashboardPage() {
     );
   }
 
-  const [surveyRows, subRows] = await Promise.all([
+  // Fetch surveys, subscription, and responses in parallel
+  const [surveyRows, subRows, allResponses, recentResponseRows] = await Promise.all([
     db.select().from(surveys).where(eq(surveys.workspaceId, ws.id)),
     db.select().from(subscriptions).where(eq(subscriptions.workspaceId, ws.id)).limit(1),
+    db.select({ score: responses.score, respondedAt: responses.respondedAt })
+      .from(responses)
+      .where(eq(responses.workspaceId, ws.id)),
+    db.select()
+      .from(responses)
+      .where(eq(responses.workspaceId, ws.id))
+      .orderBy(desc(responses.respondedAt))
+      .limit(6),
   ]);
 
   const tier = subRows[0]?.tier ?? "free";
 
-  // Mock NPS data — would be replaced by real DB queries
-  const npsScore = 42;
-  const promoterPct = 58;
-  const passivePct = 26;
-  const detractorPct = 16;
-  const totalResponses = 247;
+  // Compute real NPS metrics
+  const totalResponses = allResponses.length;
+  const promoterCount = allResponses.filter((r) => r.score >= 9).length;
+  const detractorCount = allResponses.filter((r) => r.score <= 6).length;
+  const passiveCount = totalResponses - promoterCount - detractorCount;
 
-  const promoterCount = Math.round((promoterPct / 100) * totalResponses);
-  const passiveCount = Math.round((passivePct / 100) * totalResponses);
-  const detractorCount = Math.round((detractorPct / 100) * totalResponses);
+  const npsScore =
+    totalResponses > 0
+      ? Math.round(((promoterCount - detractorCount) / totalResponses) * 100)
+      : 0;
+  const promoterPct =
+    totalResponses > 0 ? Math.round((promoterCount / totalResponses) * 100) : 0;
+  const passivePct =
+    totalResponses > 0 ? Math.round((passiveCount / totalResponses) * 100) : 0;
+  const detractorPct =
+    totalResponses > 0 ? Math.round((detractorCount / totalResponses) * 100) : 0;
+
+  const trendData = buildTrend(allResponses);
 
   const periods = ["7d", "30d", "90d", "1Y"];
-
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://npskit.threestack.io";
 
   return (
@@ -176,8 +223,15 @@ export default async function DashboardPage() {
         <div className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-6 flex flex-col items-center">
           <NPSGauge score={npsScore} />
           <div className="text-center mt-2">
-            <span className="text-5xl font-bold text-sky-400">{npsScore}</span>
+            {totalResponses > 0 ? (
+              <span className="text-5xl font-bold text-sky-400">{npsScore}</span>
+            ) : (
+              <span className="text-5xl font-bold text-gray-600">--</span>
+            )}
             <p className="text-gray-400 text-sm mt-1">Net Promoter Score</p>
+            {totalResponses === 0 && (
+              <p className="text-gray-600 text-xs mt-1">No responses yet</p>
+            )}
           </div>
           {/* Period tabs */}
           <div className="flex gap-1 mt-4 bg-gray-800 rounded-lg p-1">
@@ -208,7 +262,9 @@ export default async function DashboardPage() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-sm text-green-400 font-medium">Promoters (9–10)</span>
-                <span className="text-sm text-gray-300">{promoterPct}% · {promoterCount}</span>
+                <span className="text-sm text-gray-300">
+                  {promoterPct}% · {promoterCount}
+                </span>
               </div>
               <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
                 <div
@@ -222,7 +278,9 @@ export default async function DashboardPage() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-sm text-yellow-400 font-medium">Passives (7–8)</span>
-                <span className="text-sm text-gray-300">{passivePct}% · {passiveCount}</span>
+                <span className="text-sm text-gray-300">
+                  {passivePct}% · {passiveCount}
+                </span>
               </div>
               <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
                 <div
@@ -236,7 +294,9 @@ export default async function DashboardPage() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-sm text-red-400 font-medium">Detractors (0–6)</span>
-                <span className="text-sm text-gray-300">{detractorPct}% · {detractorCount}</span>
+                <span className="text-sm text-gray-300">
+                  {detractorPct}% · {detractorCount}
+                </span>
               </div>
               <div className="h-2.5 bg-gray-800 rounded-full overflow-hidden">
                 <div
@@ -249,15 +309,21 @@ export default async function DashboardPage() {
 
           <div className="mt-6 pt-4 border-t border-gray-800 grid grid-cols-3 gap-3 text-center">
             <div>
-              <p className="text-2xl font-bold text-green-400">{promoterPct}%</p>
+              <p className="text-2xl font-bold text-green-400">
+                {totalResponses > 0 ? `${promoterPct}%` : "--"}
+              </p>
               <p className="text-xs text-gray-500 mt-0.5">Promoters</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-yellow-400">{passivePct}%</p>
+              <p className="text-2xl font-bold text-yellow-400">
+                {totalResponses > 0 ? `${passivePct}%` : "--"}
+              </p>
               <p className="text-xs text-gray-500 mt-0.5">Passives</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-red-400">{detractorPct}%</p>
+              <p className="text-2xl font-bold text-red-400">
+                {totalResponses > 0 ? `${detractorPct}%` : "--"}
+              </p>
               <p className="text-xs text-gray-500 mt-0.5">Detractors</p>
             </div>
           </div>
@@ -270,7 +336,7 @@ export default async function DashboardPage() {
           <h3 className="text-white font-semibold">NPS Trend (30 days)</h3>
           <span className="text-xs text-gray-500">Score over time</span>
         </div>
-        <NPSTrendChart data={MOCK_TREND} />
+        <NPSTrendChart data={trendData} />
       </div>
 
       {/* Response Table */}
@@ -282,7 +348,7 @@ export default async function DashboardPage() {
           </Link>
         </div>
 
-        {MOCK_RESPONSES.length === 0 ? (
+        {recentResponseRows.length === 0 ? (
           <div className="p-8 text-center">
             <p className="text-gray-400 mb-4">No responses yet. Install the widget to start collecting.</p>
             <pre className="mt-2 text-xs text-sky-400 bg-gray-950 rounded-lg p-4 text-left overflow-auto inline-block">
@@ -299,19 +365,27 @@ export default async function DashboardPage() {
               <span>Date</span>
             </div>
             <div className="divide-y divide-gray-800">
-              {MOCK_RESPONSES.map((r) => (
+              {recentResponseRows.map((r) => (
                 <div key={r.id} className="grid grid-cols-4 gap-4 px-5 py-4 items-center">
                   <ScoreBadge score={r.score} />
-                  <TypeBadge type={r.type} />
-                  <p className="text-gray-300 text-sm truncate">{r.comment}</p>
-                  <span className="text-gray-500 text-xs">{r.date}</span>
+                  <TypeBadge type={responseType(r.score)} />
+                  <p className="text-gray-300 text-sm truncate">
+                    {r.followUpText ?? <span className="text-gray-600 italic">No comment</span>}
+                  </p>
+                  <span className="text-gray-500 text-xs">
+                    {new Date(r.respondedAt).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </span>
                 </div>
               ))}
             </div>
             <div className="p-4 border-t border-gray-800 text-center">
-              <button className="text-sky-400 text-sm hover:text-sky-300 font-medium">
-                Load more
-              </button>
+              <Link href="/dashboard/responses" className="text-sky-400 text-sm hover:text-sky-300 font-medium">
+                View all responses →
+              </Link>
             </div>
           </>
         )}

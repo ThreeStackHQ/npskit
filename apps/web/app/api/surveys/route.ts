@@ -42,14 +42,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
   }
 
-  // Verify ownership
+  // Verify ownership — select ownerId so we can assert the caller owns this workspace
   const ws = await db
-    .select({ id: workspaces.id })
+    .select({ id: workspaces.id, ownerId: workspaces.ownerId })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
 
-  if (!ws[0]) {
+  if (!ws[0] || ws[0].ownerId !== session!.user!.id!) {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }
 

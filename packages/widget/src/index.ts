@@ -89,6 +89,15 @@ function css(dark: boolean, primary: string): string {
   );
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function inject(cfg: SurveyConfig): void {
   const style = document.createElement("style");
   style.textContent = css(cfg.theme === "dark", cfg.primaryColor);
@@ -121,9 +130,9 @@ function inject(cfg: SurveyConfig): void {
 
   wrap.innerHTML = `<div id="nk-box" style="position:relative">
     <button id="nk-close" aria-label="Close">✕</button>
-    <p id="nk-title">${prompt}</p>
+    <p id="nk-title">${escapeHtml(prompt)}</p>
     ${scaleHtml}
-    <textarea id="nk-follow" rows="2" placeholder="${followUp}" style="display:none"></textarea>
+    <textarea id="nk-follow" rows="2" placeholder="${escapeHtml(followUp)}" style="display:none"></textarea>
     <button id="nk-submit" disabled>Send feedback</button>
     <div id="nk-footer"><a href="https://npskit.threestack.io" target="_blank">Powered by NPSKit</a></div>
   </div>`;

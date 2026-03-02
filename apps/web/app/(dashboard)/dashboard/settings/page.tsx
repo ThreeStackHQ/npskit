@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { db, workspaces, subscriptions, eq } from "@npskit/db";
 import { PLANS } from "@/lib/stripe";
+import { UpgradeButtons } from "./UpgradeButtons";
 
 export const dynamic = "force-dynamic";
 
@@ -66,25 +67,7 @@ export default async function SettingsPage() {
           )}
         </div>
 
-        {tier === "free" && (
-          <div className="grid grid-cols-2 gap-4">
-            {(["pro", "business"] as const).map((t) => (
-              <form key={t} action="/api/stripe/checkout" method="POST">
-                <input type="hidden" name="workspaceId" value={ws.id} />
-                <input type="hidden" name="tier" value={t} />
-                <button
-                  type="submit"
-                  className="w-full border border-sky-500 text-sky-400 hover:bg-sky-500 hover:text-white px-4 py-3 rounded-lg font-semibold text-sm transition-colors capitalize"
-                >
-                  Upgrade to {t}
-                  <span className="block text-xs font-normal mt-0.5 opacity-75">
-                    ${(PLANS[t].price / 100).toFixed(0)}/mo
-                  </span>
-                </button>
-              </form>
-            ))}
-          </div>
-        )}
+        {tier === "free" && <UpgradeButtons workspaceId={ws.id} />}
       </div>
     </div>
   );
